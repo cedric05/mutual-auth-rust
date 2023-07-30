@@ -1,11 +1,14 @@
 use clap::Parser;
+use futures::{SinkExt, TryStreamExt};
+use mutual_auth_rust::Message;
 use openssl::{
     ssl::{SslConnector, SslFiletype, SslMethod, SslSessionCacheMode, SslVerifyMode, SslVersion},
     x509::{store::X509StoreBuilder, X509},
 };
 use std::{fs, net::SocketAddr, pin::Pin};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_openssl::SslStream;
+use tokio_serde::{formats::SymmetricalJson, SymmetricallyFramed};
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -33,12 +36,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = tokio::net::TcpStream::connect(socket_addr).await?;
     let mut stream = SslStream::new(ssl, stream)?;
     Pin::new(&mut stream).connect().await.unwrap();
-    let message = "hi";
-    println!("client writing {}", message);
-    stream.write(&message.as_bytes()).await.unwrap();
-    let mut message = [0; 2];
-    stream.read(&mut message).await.unwrap();
-    println!("read {}", String::from_utf8(message.to_vec()).unwrap());
+    let frame = Framed::new(stream, LengthDelimitedCodec::new());
+
+    let mut frame = SymmetricallyFramed::new(frame, SymmetricalJson::default());
+
+    let message = Message {
+        msg: "client".to_string(),
+    };
+
+    frame.send(message).await?;
+    println!("message sent to server");
+
+    let message_from_server = frame.try_next().await.unwrap();
+
+    println!("reading message from server , {:?}", message_from_server);
+
+    // let message = "hi";
+    // println!("client writing {}", message);
+    // stream.write(&message.as_bytes()).await.unwrap();
+    // let mut message = [0; 2];
+    // stream.read(&mut message).await.unwrap();
+    // println!("read {}", String::from_utf8(message.to_vec()).unwrap());
     Ok(())
 }
 
